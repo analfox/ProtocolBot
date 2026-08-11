@@ -1,19 +1,60 @@
 @echo off
 chcp 65001 >nul
+setlocal
+
 cd /d "%~dp0"
-set REPO=analfox/ProtocolBot
-echo Скачиваю последнюю версию...
-powershell -NoProfile -Command "try { Invoke-WebRequest -Uri 'https://github.com/%REPO%/archive/refs/heads/main.zip' -OutFile '_update.zip' -UseBasicParsing } catch { Write-Host 'ОШИБКА скачивания:' $_.Exception.Message; exit 1 }"
-if not exist "_update.zip" (echo Не удалось скачать. Проверь интернет. & pause & exit /b)
-echo Распаковываю...
-powershell -NoProfile -Command "if (Test-Path '_upd') { Remove-Item '_upd' -Recurse -Force }; Expand-Archive -Path '_update.zip' -DestinationPath '_upd' -Force"
-for /d %%d in (_upd\*) do (
-    echo Обновляю файлы...
-    xcopy "%%d\*" "%~dp0" /Y /Q >nul
-)
-del /q _update.zip 2>nul
-if exist "_upd" rmdir /s /q _upd
+
+set "REPO=analfox/ProtocolBot"
+set "ZIP=%~dp0_update.zip"
+set "TEMP=%~dp0_upd"
+
 echo.
-echo Готово! Файлы обновлены. Твои настройки и протоколы не тронуты.
-echo Закрой программу и запусти заново.
+echo Downloading update...
+
+powershell -NoProfile -Command "try { Invoke-WebRequest -Uri 'https://github.com/%REPO%/archive/refs/heads/main.zip' -OutFile '%ZIP%' -UseBasicParsing -ErrorAction Stop } catch { Write-Host $_.Exception.Message; exit 1 }"
+
+if errorlevel 1 (
+echo.
+echo Download failed.
 pause
+exit /b 1
+)
+
+if not exist "%ZIP%" (
+echo.
+echo Update file was not created.
+pause
+exit /b 1
+)
+
+echo Extracting...
+
+if exist "%TEMP%" rmdir /s /q "%TEMP%"
+
+powershell -NoProfile -Command "Expand-Archive -Path '%ZIP%' -DestinationPath '%TEMP%' -Force"
+
+if errorlevel 1 (
+echo.
+echo Extraction failed.
+del /q "%ZIP%" 2>nul
+pause
+exit /b 1
+)
+
+echo Updating files...
+
+for /d %%D in ("%TEMP%*") do (
+xcopy "%%D*" "%~dp0" /E /I /Y /Q >nul
+)
+
+del /q "%ZIP%" 2>nul
+rmdir /s /q "%TEMP%" 2>nul
+
+echo.
+echo Update completed successfully.
+echo Your settings and protocols were not changed.
+echo.
+echo Close the program and start it again.
+
+pause
+endlocal
