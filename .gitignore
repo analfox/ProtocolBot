@@ -1,8 +1,11 @@
 config.json
 protocolbot.log
+
 __pycache__/
 *.pyc
+
 Протокол_*.docx
 ~$*
+
 залить.bat
 обновить.bat
