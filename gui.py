@@ -1480,7 +1480,7 @@ class ProtocolBotApp:
 
                     # Под ФИО - подразделение, а если его нет - организация.
                     # Под должностью ничего не пишется.
-                    name_org = participant.get("name", "")
+                    #name_org = participant.get("name", "")
                     second_line = (participant.get("subdivision") or "").strip() or org_name
                     if second_line:
                         name_org += "\n" + second_line
