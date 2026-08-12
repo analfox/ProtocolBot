@@ -259,14 +259,17 @@ def extract_from_docx(file_path: str) -> list[dict]:
         name_idx = None
         position_idx = None
         org_idx = None
+        group_idx = None
 
         for i, h in enumerate(header):
             if "фамилия" in h or "фио" in h or "имя" in h:
                 name_idx = i
             if "должность" in h or "профессия" in h:
                 position_idx = i
-            if "организация" in h or "наименование" in h:
+            if "организация" in h or "наименование" in h or "подразделение" in h:
                 org_idx = i
+            if "группа" in h:
+                group_idx = i
 
         if name_idx is None:
             continue
@@ -280,11 +283,13 @@ def extract_from_docx(file_path: str) -> list[dict]:
             name = re.sub(r'\s+', ' ', cells[name_idx])
             position = re.sub(r'\s+', ' ', cells[position_idx]) if position_idx is not None and len(cells) > position_idx else ""
             org = re.sub(r'\s+', ' ', cells[org_idx]) if org_idx is not None and len(cells) > org_idx else ""
+            group = re.sub(r'\s+', ' ', cells[group_idx]) if group_idx is not None and len(cells) > group_idx else ""
 
             participants.append({
                 "name": name,
                 "position": position,
                 "organization": org,
+                "group": group,
             })
 
     return participants
