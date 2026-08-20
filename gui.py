@@ -558,6 +558,12 @@ class ProtocolBotApp:
 
         ttk.Button(
             buttons_frame,
+            text="Сформировать удостоверения",
+            command=self.generate_certificates
+        ).pack(side=tk.RIGHT, padx=5)        
+
+        ttk.Button(
+            buttons_frame,
             text="Сгенерировать протокол",
             command=self.generate_protocol
         ).pack(side=tk.RIGHT, padx=5)
@@ -1603,6 +1609,65 @@ class ProtocolBotApp:
     # -----------------------------------------------------------------
     # Очистка
     # -----------------------------------------------------------------
+    # -----------------------------------------------------------------
+    # Удостоверения (2 на страницу, по шаблону)
+    # -----------------------------------------------------------------
+    def generate_certificates(self):
+        if not self.participants:
+            messagebox.showwarning("Внимание", "Сначала загрузите файл со списком участников")
+            return
+        if not self.protocol_num.get().strip():
+            messagebox.showwarning("Внимание", "Введите номер протокола")
+            return
+        self._sync_all()
+        start_number = askstring(
+            "Удостоверения",
+            "Номер первого удостоверения (например, 1423/26).\n"
+            "У обоих удостоверений одного человека номер одинаковый,\n"
+            "для следующего участника он увеличивается на 1.",
+            parent=self.root
+        )
+        if start_number is None:
+            return
+        rows = []
+        for p in self.participants:
+            groups = self._split_groups(p.get("group", ""))
+            if not groups:
+                groups = [self.group_var.get()]
+            rows.append((p, groups))
+        safe_name = self._sanitize_filename(
+            f"Удостоверения_{self.protocol_num.get().strip()}_{self.date_entry.get().strip()}.docx"
+        )
+        output_path = filedialog.asksaveasfilename(
+            title="Сохранить удостоверения",
+            defaultextension=".docx",
+            filetypes=[("Word документ", "*.docx")],
+            initialdir=os.path.dirname(os.path.abspath(__file__)),
+            initialfile=safe_name
+        )
+        if not output_path:
+            return
+        try:
+            import certificates
+            self.status_var.set("Создание удостоверений...")
+            self.root.update()
+            certificates.create_certificates_file(
+                output_path,
+                rows,
+                {
+                    "protocol_number": self.protocol_num.get().strip(),
+                    "date": self.date_entry.get().strip() or datetime.now().strftime("%d.%m.%Y"),
+                    "hours": self.hours_var.get(),
+                    "organization": self.org_var.get().strip(),
+                    "start_number": start_number,
+                },
+            )
+            self.status_var.set(f"Удостоверения сохранены: {os.path.basename(output_path)}")
+            messagebox.showinfo("Готово", f"Удостоверения созданы!\n\n{output_path}")
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Ошибка создания удостоверений: {str(e)}")
+            self.status_var.set("Ошибка создания удостоверений")    
+    
     def clear_all(self):
         self.file_path = None
         self.participants = []
