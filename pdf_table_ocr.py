@@ -184,10 +184,12 @@ def _ocr_cell(img, lang=None):
 
 
 def _classify_columns(header_texts):
-    name_idx = pos_idx = org_idx = group_idx = None
+    name_idx = pos_idx = org_idx = group_idx = snils_idx = None
     for i, h in enumerate(header_texts):
         hl = h.lower()
-        if any(k in hl for k in ("фио", "фамилия")):
+        if "снилс" in hl:
+            snils_idx = i
+        elif any(k in hl for k in ("фио", "фамилия")):
             name_idx = i
         elif any(k in hl for k in ("должность", "профессия")):
             pos_idx = i
@@ -195,7 +197,7 @@ def _classify_columns(header_texts):
             org_idx = i
         elif "групп" in hl:
             group_idx = i
-    return name_idx, pos_idx, org_idx, group_idx
+    return name_idx, pos_idx, org_idx, group_idx, snils_idx
 
 
 def _looks_like_name(text):
@@ -442,7 +444,7 @@ def extract_tables_from_pdf(
                     print(f"    строка {r_i}: {r}")
 
             header = grid_text[0]
-            name_idx, pos_idx, org_idx, group_idx = _classify_columns(header)
+            name_idx, pos_idx, org_idx, group_idx, snils_idx = _classify_columns(header)
 
             # Запасной поиск колонки ФИО по содержимому строк.
             fallback_used = False
@@ -468,6 +470,7 @@ def extract_tables_from_pdf(
                     "position": row[pos_idx] if pos_idx is not None and pos_idx < len(row) else "",
                     "organization": row[org_idx] if org_idx is not None and org_idx < len(row) else "",
                     "group": _clean_group_cell(row[group_idx]) if group_idx is not None and group_idx < len(row) else "",
+                    "snils": row[snils_idx] if snils_idx is not None and snils_idx < len(row) else "",
                 })
 
             tables.append({

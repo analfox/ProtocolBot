@@ -18,6 +18,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from permits import PERMITS, parse_permits, SHEET_GROUPS, normalize_permit_codes
 from create_protocol import extract_from_excel, extract_from_docx, extract_from_doc, extract_excel_tables
 from config_loader import get_config, save_config
+import certificates
+import mintrud
 
 # Логи: все ошибки пишутся в protocolbot.log рядом с программой.
 import app_log
@@ -434,6 +436,10 @@ class ProtocolBotApp:
         self.date_entry.insert(0, datetime.now().strftime("%d.%m.%Y"))
         self.date_entry.pack(side=tk.LEFT, padx=5)
 
+        ttk.Label(row1, text="Учебная группа:").pack(side=tk.LEFT, padx=(20, 0))
+        self.study_group_entry = ttk.Entry(row1, width=10)
+        self.study_group_entry.pack(side=tk.LEFT, padx=5)
+
         row2 = ttk.Frame(step2_frame)
         row2.pack(fill=tk.X, pady=2)
 
@@ -454,6 +460,10 @@ class ProtocolBotApp:
             width=10
         ).pack(side=tk.LEFT, padx=5)
 
+        ttk.Label(row2, text="№ первого удостоверения:").pack(side=tk.LEFT, padx=(20, 0))
+        self.cert_start_entry = ttk.Entry(row2, width=12)
+        self.cert_start_entry.pack(side=tk.LEFT, padx=5)
+
         row3 = ttk.Frame(step2_frame)
         row3.pack(fill=tk.X, pady=2)
 
@@ -461,6 +471,10 @@ class ProtocolBotApp:
         self.org_var = tk.StringVar(value="")
         self.org_entry = ttk.Entry(row3, textvariable=self.org_var)
         self.org_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+
+        ttk.Label(row3, text="ИНН организации:").pack(side=tk.LEFT, padx=(20, 0))
+        self.inn_var = tk.StringVar(value="")
+        ttk.Entry(row3, textvariable=self.inn_var, width=15).pack(side=tk.LEFT, padx=5)
 
         ttk.Label(
             step2_frame,
@@ -497,7 +511,7 @@ class ProtocolBotApp:
             command=self.remove_participants
         ).pack(side=tk.LEFT)
 
-        columns = ("num", "name", "position", "subdivision", "group", "permits")
+        columns = ("num", "name", "position", "subdivision", "snils", "group", "permits")
 
         self.tree = ttk.Treeview(
             step3_frame,
@@ -511,13 +525,15 @@ class ProtocolBotApp:
         self.tree.heading("name", text="ФИО")
         self.tree.heading("position", text="Должность")
         self.tree.heading("subdivision", text="Подразделение")
+        self.tree.heading("snils", text="СНИЛС")
         self.tree.heading("group", text="Группа")
         self.tree.heading("permits", text="Коды допусков")
 
         self.tree.column("num", width=40, anchor=tk.CENTER)
-        self.tree.column("name", width=210)
-        self.tree.column("position", width=160)
-        self.tree.column("subdivision", width=170)
+        self.tree.column("name", width=190)
+        self.tree.column("position", width=150)
+        self.tree.column("subdivision", width=140)
+        self.tree.column("snils", width=110, anchor=tk.CENTER)
         self.tree.column("group", width=70, anchor=tk.CENTER)
         self.tree.column("permits", width=140, anchor=tk.CENTER)
 
@@ -555,6 +571,12 @@ class ProtocolBotApp:
         # === КНОПКИ ===
         buttons_frame = ttk.Frame(main_frame)
         buttons_frame.pack(fill=tk.X)
+
+        ttk.Button(
+            buttons_frame,
+            text="Сформировать реестр",
+            command=self.generate_registry
+        ).pack(side=tk.RIGHT, padx=5)
 
         ttk.Button(
             buttons_frame,
@@ -691,6 +713,7 @@ class ProtocolBotApp:
 
             p.setdefault("name", "")
             p.setdefault("position", "")
+            p["snils"] = mintrud.format_snils(p.get("snils", ""))
             p["group"] = self._normalize_group(p.get("group", ""))
             p.setdefault("permit_codes", "")
             p.setdefault("permit_text", "")
@@ -841,6 +864,7 @@ class ProtocolBotApp:
                     p.get("name", ""),
                     p.get("position", ""),
                     p.get("subdivision", ""),
+                    p.get("snils", ""),
                     p.get("group", ""),
                     p.get("permit_codes", "")
                 )
@@ -853,6 +877,7 @@ class ProtocolBotApp:
             "name": "",
             "position": "",
             "subdivision": "",
+            "snils": "",
             "group": "",
             "permit_codes": "",
             "permit_text": "",
@@ -898,8 +923,9 @@ class ProtocolBotApp:
         p["name"] = str(values[1]).strip()
         p["position"] = str(values[2]).strip()
         p["subdivision"] = str(values[3]).strip()
-        p["group"] = self._normalize_group(values[4])
-        p["permit_codes"] = str(values[5]).strip()
+        p["snils"] = str(values[4]).strip()
+        p["group"] = self._normalize_group(values[5])
+        p["permit_codes"] = str(values[6]).strip()
 
         groups_map = split_permit_groups(p["permit_codes"])
         p["permits_by_group"] = groups_map
@@ -937,6 +963,7 @@ class ProtocolBotApp:
             "name": "ФИО",
             "position": "Должность",
             "subdivision": "Подразделение",
+            "snils": "СНИЛС",
             "group": "Группа",
             "permits": "Коды допусков"
         }
@@ -967,6 +994,8 @@ class ProtocolBotApp:
 
         if field == "group":
             new_value = self._normalize_group(new_value)
+        elif field == "snils":
+            new_value = mintrud.format_snils(new_value)
         else:
             new_value = new_value.strip()
 
@@ -1168,7 +1197,12 @@ class ProtocolBotApp:
             messagebox.showwarning("Внимание", "Введите номер протокола")
             return
 
+        if not self.study_group_entry.get().strip():
+            messagebox.showwarning("Внимание", "Введите учебную группу (для протокола Минтруда)")
+            return
+
         self._sync_all()
+        self._assign_certificate_numbers()
 
         missing_permits = []
         for p in self.participants:
@@ -1192,6 +1226,7 @@ class ProtocolBotApp:
             "course_name": "Безопасные методы и приемы выполнения работ на высоте",
             "group": self.group_var.get(),
             "hours": self.hours_var.get(),
+            "study_group": self.study_group_entry.get().strip(),
             "organization": self.org_var.get().strip(),
         }
 
@@ -1252,11 +1287,16 @@ class ProtocolBotApp:
                 protocol_info=self.protocol_info,
                 group_override=group_override
             )
+            mintrud_path = self._create_mintrud_protocol(
+                os.path.dirname(output_path), self.protocol_info
+            )
 
-            self.status_var.set(f"Протокол сохранён: {os.path.basename(output_path)}")
+            self.status_var.set(
+                f"Протоколы сохранены: {os.path.basename(output_path)}, {os.path.basename(mintrud_path)}"
+            )
             messagebox.showinfo(
                 "Готово",
-                f"Протокол успешно создан!\n\n{output_path}"
+                f"Протоколы успешно созданы!\n\n{output_path}\n{mintrud_path}"
             )
         except Exception as e:
             messagebox.showerror(
@@ -1314,6 +1354,7 @@ class ProtocolBotApp:
                 created_files.append(output_path)
 
             if created_files:
+                created_files.append(self._create_mintrud_protocol(output_dir, base_protocol_info))
                 self.status_var.set(f"Создано протоколов: {len(created_files)}")
                 messagebox.showinfo(
                     "Готово",
@@ -1328,6 +1369,36 @@ class ProtocolBotApp:
                 f"Ошибка создания протоколов: {str(e)}"
             )
             self.status_var.set("Ошибка создания протоколов")
+
+    def _certificate_groups(self, p):
+        """Группы, на которые человеку выдаются удостоверения (по одному на группу)."""
+        return self._split_groups(p.get("group", "")) or [self.group_var.get()]
+
+    def _assign_certificate_numbers(self):
+        """Номера удостоверений - в том же порядке, что их печатает
+        «Сформировать удостоверения»: с первого по журналу, +1 на каждое
+        удостоверение. p["cert_numbers"] = {группа: номер}.
+        Поле пустое - в протоколе остаётся прочерк."""
+        number = self.cert_start_entry.get().strip()
+        for p in self.participants:
+            p["cert_numbers"] = {}
+            for grp in self._certificate_groups(p):
+                if number:
+                    p["cert_numbers"][grp] = number
+                    number = certificates.next_number(number)
+
+    def _create_mintrud_protocol(self, output_dir, protocol_info):
+        """Второй протокол - проверка знаний ОТ (Минтруд), один на всех участников."""
+        filename = self._sanitize_filename(
+            f"Протокол_Минтруд_{protocol_info['protocol_number']}_{protocol_info['date']}.docx"
+        )
+        output_path = os.path.join(output_dir, filename)
+        rows = [
+            (p, self._split_groups(p.get("group", "")) or [self.group_var.get()])
+            for p in self.participants
+        ]
+        mintrud.create_mintrud_protocol(output_path, rows, protocol_info)
+        return output_path
 
     # -----------------------------------------------------------------
     # Создание Word-файла протокола (формат как в образце 19.06.2026)
@@ -1495,7 +1566,7 @@ class ProtocolBotApp:
                     row.cells[2].text = participant.get("position", "")
 
                 row.cells[3].text = "сдано"
-                row.cells[4].text = "____"
+                row.cells[4].text = participant.get("cert_numbers", {}).get(grp) or "____"
                 row.cells[5].text = grp
 
                 texts = participant.get("permit_text_by_group", {}) or {}
@@ -1577,7 +1648,7 @@ class ProtocolBotApp:
                     run.font.size = Pt(9)
                     run.bold = True
 
-        for idx, participant in enumerate(participants, 1):
+        for idx, (participant, sub_groups) in enumerate(rows_plan, 1):
             row = v_table.rows[idx]
             row.cells[0].text = f"{idx}."
 
@@ -1587,7 +1658,9 @@ class ProtocolBotApp:
                 name_org += "\n" + second_line
             row.cells[1].text = name_org
 
-            row.cells[2].text = ""
+            # Номера удостоверений человека по группам этого протокола.
+            numbers = participant.get("cert_numbers", {})
+            row.cells[2].text = ", ".join(numbers[g] for g in sub_groups if g in numbers)
             row.cells[3].text = ""
 
         for row in v_table.rows:
@@ -1619,22 +1692,15 @@ class ProtocolBotApp:
         if not self.protocol_num.get().strip():
             messagebox.showwarning("Внимание", "Введите номер протокола")
             return
-        self._sync_all()
-        start_number = askstring(
-            "Удостоверения",
-            "Номер первого удостоверения (например, 1423/26).\n"
-            "У обоих удостоверений одного человека номер одинаковый,\n"
-            "для следующего участника он увеличивается на 1.",
-            parent=self.root
-        )
-        if start_number is None:
+        start_number = self.cert_start_entry.get().strip()
+        if not start_number:
+            messagebox.showwarning("Внимание", "Введите номер первого удостоверения (по журналу)")
+            self.cert_start_entry.focus_set()
             return
+        self._sync_all()
         rows = []
         for p in self.participants:
-            groups = self._split_groups(p.get("group", ""))
-            if not groups:
-                groups = [self.group_var.get()]
-            rows.append((p, groups))
+            rows.append((p, self._certificate_groups(p)))
         safe_name = self._sanitize_filename(
             f"Удостоверения_{self.protocol_num.get().strip()}_{self.date_entry.get().strip()}.docx"
         )
@@ -1648,7 +1714,6 @@ class ProtocolBotApp:
         if not output_path:
             return
         try:
-            import certificates
             self.status_var.set("Создание удостоверений...")
             self.root.update()
             certificates.create_certificates_file(
@@ -1666,8 +1731,64 @@ class ProtocolBotApp:
             messagebox.showinfo("Готово", f"Удостоверения созданы!\n\n{output_path}")
         except Exception as e:
             messagebox.showerror("Ошибка", f"Ошибка создания удостоверений: {str(e)}")
-            self.status_var.set("Ошибка создания удостоверений")    
-    
+            self.status_var.set("Ошибка создания удостоверений")
+
+    # -----------------------------------------------------------------
+    # Реестр обученных по ОТ для Минтруда
+    # -----------------------------------------------------------------
+    def generate_registry(self):
+        if not self.participants:
+            messagebox.showwarning("Внимание", "Сначала загрузите файл со списком участников")
+            return
+        if not self.protocol_num.get().strip():
+            messagebox.showwarning("Внимание", "Введите номер протокола")
+            return
+        self._sync_all()
+
+        inn = re.sub(r"\s+", "", self.inn_var.get())
+        if not inn and not messagebox.askyesno(
+            "Внимание",
+            "Не указан ИНН организации.\n\nСформировать реестр без ИНН?"
+        ):
+            return
+
+        no_snils = [p.get("name", "") for p in self.participants if not str(p.get("snils", "")).strip()]
+        if no_snils and not messagebox.askyesno(
+            "Внимание",
+            "Не указан СНИЛС у:\n"
+            + "\n".join(no_snils[:5])
+            + ("\n..." if len(no_snils) > 5 else "")
+            + "\n\nСформировать реестр без СНИЛС для них?"
+        ):
+            return
+
+        info = {
+            "protocol_number": self.protocol_num.get().strip(),
+            "date": self.date_entry.get().strip() or datetime.now().strftime("%d.%m.%Y"),
+            "organization": self.org_var.get().strip(),
+            "inn": inn,
+        }
+        safe_name = self._sanitize_filename(
+            f"Реестр_ОТ_{info['protocol_number']}_{info['date']}.xlsx"
+        )
+        output_path = filedialog.asksaveasfilename(
+            title="Сохранить реестр",
+            defaultextension=".xlsx",
+            filetypes=[("Excel", "*.xlsx")],
+            initialdir=os.path.dirname(os.path.abspath(__file__)),
+            initialfile=safe_name
+        )
+        if not output_path:
+            return
+        try:
+            mintrud.create_registry(output_path, self.participants, info)
+            self.status_var.set(f"Реестр сохранён: {os.path.basename(output_path)}")
+            messagebox.showinfo("Готово", f"Реестр создан!\n\n{output_path}")
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Ошибка создания реестра: {str(e)}")
+            self.status_var.set("Ошибка создания реестра")
+
+
     def clear_all(self):
         self.file_path = None
         self.participants = []
@@ -1680,10 +1801,13 @@ class ProtocolBotApp:
 
         self.date_entry.delete(0, tk.END)
         self.date_entry.insert(0, datetime.now().strftime("%d.%m.%Y"))
+        self.study_group_entry.delete(0, tk.END)
+        self.cert_start_entry.delete(0, tk.END)
 
         self.group_var.set("3")
         self.hours_var.set("32")
         self.org_var.set("")
+        self.inn_var.set("")
 
         for item in self.tree.get_children():
             self.tree.delete(item)

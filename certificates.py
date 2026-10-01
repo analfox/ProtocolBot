@@ -2,12 +2,19 @@
 certificates.py - удостоверения ПО ШАБЛОНУ Word с плейсхолдерами.
 
 Вёрстка живёт в файле certificate_template.docx рядом с программой и
-НЕ ТРОГАЕТСЯ программой: все пустые строки и отступы остаются как в шаблоне.
+НЕ ТРОГАЕТСЯ программой. Размер удостоверения в шаблоне жёсткий:
+  - строки таблицы точной высоты; справа подпись руководителя - отдельная
+    нижняя строка, поэтому всегда внизу;
+  - у строк Фамилия/Имя/Отчество точный межстрочный интервал (пустое
+    отчество или уменьшенная фамилия не поднимают низ);
+  - должность и организация - во вложенной таблице без рамок точной высоты
+    справа от места под фото, текст прижат к низу (длинная должность растёт
+    вверх и ничего ниже не сдвигает).
 Программа только:
   1) подставляет данные вместо {плейсхолдеров};
-  2) если текст допусков длиннее, чем строка в шаблоне, - добирает строки
-     из пустого резерва МЕЖДУ допусками и подписью (подпись остаётся внизу);
-  3) фиксирует ширины колонок и уменьшает шрифт очень длинной должности.
+  2) фиксирует ширины колонок;
+  3) уменьшает шрифт, если текст не влезает в свою ячейку (должность,
+     организация, допуски, длинные ФИО) - иначе Word обрезал бы его.
 
 Плейсхолдеры: {number} {surname} {name} {patronymic} {position} {org}
 {date_issue} {date_valid} {group} {permit_text} {protocol_number}
@@ -17,14 +24,13 @@ certificates.py - удостоверения ПО ШАБЛОНУ Word с пле�
 Часы практического обучения - всегда 5.
 """
 import copy
-import math
 import os
 import re
 from datetime import datetime
 
 from docx import Document
-from docx.shared import Pt, Cm
-from docx.table import Table
+from docx.shared import Pt
+from docx.text.paragraph import Paragraph
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 
@@ -35,17 +41,17 @@ PRACTICE_HOURS = "5"
 # текст не расползался по ширине.
 LEFT_WIDTH_CM = 8.93
 RIGHT_WIDTH_CM = 8.75
-# Граница слева для должности/организации: левее - место под фото.
-PHOTO_SPACE_CM = 3.5
 
-# Примерная вместимость одной строки правой ячейки (для расчёта допусков).
-CHARS_PER_LINE = 65
-# Примерная вместимость одной строки для должности в левой ячейке.
-POSITION_CHARS_PER_LINE = 45
-
-SIGNATURE_MARKERS = ("Руководитель", "Первушов", "М.П.", "(подпись)")
-PERMIT_MARKER = "Может быть допущен"
-BASE_MARKER = "Основание"
+# Место под текст в шаблоне (pt, замерено в Word). По нему подбирается шрифт,
+# чтобы текст не вылез за ячейку точной высоты. Поменяли вёрстку шаблона -
+# поправьте и эти числа.
+BOX_WIDTH_PT = 143.85      # рамка «должность + организация» справа от фото
+BOX_TEXT_PT = 33.75        # её высота минус «(профессия должность)», «(организация)» и отступ
+PERMIT_WIDTH_PT = 237.25   # ширина текста правой ячейки
+PERMIT_HEIGHT_PT = 75.75   # место под абзац «Может быть допущен...» до подписи
+FIO_WIDTH_PT = 99.0        # от начала фамилии/имени/отчества до правого края
+LINE_FACTOR = 1.2          # высота строки Times New Roman в Word ~1.2 кегля (с запасом)
+MIN_PT = 4.5
 
 _MONTHS = [
     "января", "февраля", "марта", "апреля", "мая", "июня",
@@ -84,7 +90,7 @@ def _date_parts(date_str):
     return int(day), _MONTHS[int(month) - 1], int(year)
 
 
-def _next_number(current):
+def next_number(current):
     m = re.match(r"^(\d+)(.*)$", str(current).strip(), re.S)
     if not m:
         return current
@@ -156,9 +162,8 @@ def _fill_element(element, mapping):
         t.text = text
 
 
-def _fix_geometry(table):
+def _fix_geometry(tbl):
     """Фиксированная раскладка + точные ширины колонок (схемобезопасно)."""
-    tbl = table._tbl
     tblPr = tbl.find(qn("w:tblPr"))
     if tblPr is None:
         tblPr = OxmlElement("w:tblPr")
@@ -171,24 +176,12 @@ def _fix_geometry(table):
         if len(cols) == 2:
             cols[0].set(qn("w:w"), _tw(LEFT_WIDTH_CM))
             cols[1].set(qn("w:w"), _tw(RIGHT_WIDTH_CM))
-    for row in table.rows:
-        for idx, w in enumerate((LEFT_WIDTH_CM, RIGHT_WIDTH_CM)):
-            if idx >= len(row.cells):
-                continue
-            tcPr = row.cells[idx]._tc.get_or_add_tcPr()
-            tcW = _upsert(tcPr, "w:tcW", _TCPR_ORDER)
+    # Только строки самого удостоверения, вложенную рамку должности не трогаем.
+    for tr in tbl.findall(qn("w:tr")):
+        for tc, w in zip(tr.findall(qn("w:tc")), (LEFT_WIDTH_CM, RIGHT_WIDTH_CM)):
+            tcW = _upsert(tc.get_or_add_tcPr(), "w:tcW", _TCPR_ORDER)
             tcW.set(qn("w:type"), "dxa")
             tcW.set(qn("w:w"), _tw(w))
-
-
-def _walk_cells(cells):
-    for cell in cells:
-        for p in cell.paragraphs:
-            yield p
-        for nt in cell.tables:
-            for nr in nt.rows:
-                for p in _walk_cells(nr.cells):
-                    yield p
 
 
 _PPR_ORDER = [
@@ -199,7 +192,7 @@ _PPR_ORDER = [
     "bidi", "adjustRightInd", "snapToGrid", "spacing", "ind",
     "contextualSpacing", "mirrorIndents", "suppressOverlap", "jc",
     "textDirection", "textAlignment", "textboxProperties", "outlineLvl",
-    "divId", "cnfStyle",
+    "divId", "cnfStyle", "rPr", "sectPr", "pPrChange",
 ]
 
 
@@ -211,87 +204,154 @@ def _suppress_auto_hyphens(p):
         pEl.insert(0, pPr)
     _upsert(pPr, "w:suppressAutoHyphens", _PPR_ORDER)
 
-def _shrink_long_position(table, position):
-    """Длинная должность - шрифт мельче, запрет переносов посреди слова
-    и граница слева: не залезает на место под фото."""
-    if not position:
-        return
-    size = 8 if len(position) <= 40 else (7 if len(position) <= 55 else 6)
-    for row in table.rows:
-        for p in _walk_cells(row.cells):
-            for r in p.runs:
-                if position in (r.text or ""):
-                    r.font.size = Pt(size)
-                    _suppress_auto_hyphens(p)
-                    p.paragraph_format.left_indent = Cm(PHOTO_SPACE_CM)
 
-def _consume_spacers_for_permit(table, mapping):
-    """ЕДИНСТВЕННАЯ правка макета: если текст допусков занимает больше
-    строк, чем в шаблоне, недостающее место берётся из пустых строк,
-    стоящих МЕЖДУ допусками и подписью. Остальной шаблон не трогается."""
-    if not table.rows or len(table.rows[0].cells) < 2:
-        return
-    tc = table.rows[0].cells[1]._tc
+def suppress_hyphens_for(element, keys):
+    """Запрет автопереноса в абзацах с этими плейсхолдерами: ФИО не рвём
+    через дефис, длинное слово уходит на новую строку целиком."""
+    for p in element.iter(qn("w:p")):
+        text = "".join(t.text or "" for t in p.iter(qn("w:t")))
+        if any("{" + k + "}" in text for k in keys):
+            _suppress_auto_hyphens(Paragraph(p, None))
 
-    permit = mapping.get("permit_text", "") or ""
-    intro = "Может быть допущен (а) к работе на высоте: "
-    extra = max(0, math.ceil((len(intro) + len(permit)) / CHARS_PER_LINE) - 1)
-    if not extra:
-        return
+# --- Подбор шрифта: текст должен влезть в ячейку точной высоты ----------
 
-    base_idx = permit_idx = end = None
-    for i, child in enumerate(tc):
-        txt = "".join(t.text or "" for t in child.iter(qn("w:t")))
-        if permit_idx is None and PERMIT_MARKER in txt:
-            permit_idx = i
-        if base_idx is None and BASE_MARKER in txt:
-            base_idx = i
-        if any(m in txt for m in SIGNATURE_MARKERS):
-            end = i
-            break
-    # резерв едим только между "Основанием:" и подписью
-    start = base_idx if base_idx is not None else permit_idx
-    if start is None or end is None or end <= start + 1:
-        return
+_FONTS = {}
 
-    spacers = []
-    for i in range(start + 1, end):
-        child = tc[i]
-        if child.tag == qn("w:p"):
-            text = "".join(t.text or "" for t in child.iter(qn("w:t"))).strip()
-            if not text:
-                spacers.append(child)
 
-    for p_el in spacers[:extra]:
-        p_el.getparent().remove(p_el)
+def _text_width(text, size, bold):
+    """Ширина текста в pt по метрикам Times New Roman (шрифт шаблона)."""
+    if bold not in _FONTS:
+        try:
+            from PIL import ImageFont
+            _FONTS[bold] = ImageFont.truetype("timesbd.ttf" if bold else "times.ttf", 100)
+        except Exception:
+            _FONTS[bold] = None
+    font = _FONTS[bold]
+    if font is None:
+        return len(text) * size * 0.6          # без шрифта - грубо и с запасом
+    return font.getlength(text) * size / 100
 
-def _consume_spacers_for_position(table, position):
-    """Если должность переносится на доп. строки - съедает столько же
-    пустых строк резерва в левой ячейке (с конца, ближе к таблице дат),
-    чтобы высота удостоверения не менялась."""
-    if not position or not table.rows or len(table.rows[0].cells) < 2:
-        return
-    extra = max(0, math.ceil(len(position) / POSITION_CHARS_PER_LINE) - 1)
-    if not extra:
-        return
-    tc = table.rows[0].cells[0]._tc
-    start = None
-    for i, child in enumerate(tc):
-        txt = "".join(t.text or "" for t in child.iter(qn("w:t")))
-        if position in txt:
-            start = i
-            break
-    if start is None:
-        return
-    spacers = []
-    for i in range(start + 1, len(tc)):
-        child = tc[i]
-        if child.tag == qn("w:p"):
-            text = "".join(t.text or "" for t in child.iter(qn("w:t"))).strip()
-            if not text:
-                spacers.append(child)
-    for p_el in spacers[-extra:]:
-        p_el.getparent().remove(p_el)
+
+def _line_count(text, width, size, bold):
+    """Сколько строк займёт абзац при переносе по словам, как в Word."""
+    space = _text_width(" ", size, bold)
+    lines, cur = 1, 0.0
+    for word in text.split():
+        w = _text_width(word, size, bold)
+        if cur and cur + space + w > width:
+            lines += 1
+            cur = 0.0
+        cur += (space if cur else 0) + w
+        while cur > width:                     # слово длиннее строки
+            lines += 1
+            cur -= width
+    return lines
+
+
+def _sizes_down(base):
+    """base, base-0.5, ... до MIN_PT."""
+    size = base
+    while size > MIN_PT:
+        yield size
+        size -= 0.5
+    yield MIN_PT
+
+
+def _run_size(r, default):
+    sz = r.find(qn("w:rPr") + "/" + qn("w:sz"))
+    return int(sz.get(qn("w:val"))) / 2 if sz is not None else default
+
+
+_RPR_ORDER = [
+    "rStyle", "rFonts", "b", "bCs", "i", "iCs", "caps", "smallCaps", "strike",
+    "dstrike", "outline", "shadow", "emboss", "imprint", "noProof", "snapToGrid",
+    "vanish", "webHidden", "color", "spacing", "w", "kern", "position", "sz",
+    "szCs", "highlight", "u", "effect", "bdr", "shd", "fitText", "vertAlign",
+    "rtl", "cs", "em", "lang", "eastAsianLayout", "specVanish", "oMath",
+]
+
+
+def _set_size(element, size):
+    """Кегль для рана или знака абзаца (rPr)."""
+    rPr = element if element.tag == qn("w:rPr") else element.find(qn("w:rPr"))
+    if rPr is None:
+        rPr = OxmlElement("w:rPr")
+        element.insert(0, rPr)
+    for tag in ("w:sz", "w:szCs"):
+        _upsert(rPr, tag, _RPR_ORDER).set(qn("w:val"), str(int(round(size * 2))))
+
+
+def _par_text(p):
+    return "".join(t.text or "" for t in p.iter(qn("w:t")))
+
+
+class _Target:
+    """Абзац с плейсхолдером: какие раны уменьшать и исходный кегль шаблона."""
+
+    def __init__(self, p, key, whole_paragraph):
+        self.p = p
+        runs = p.findall(qn("w:r"))
+        if not whole_paragraph:
+            runs = [r for r in runs if "{" + key + "}" in _par_text(r)]
+        self.runs = runs
+        self.base = _run_size(runs[0], 7) if runs else 7
+        self.bold = bool(runs) and runs[0].find(qn("w:rPr") + "/" + qn("w:b")) is not None
+
+    def text(self):
+        return "".join(_par_text(r) for r in self.runs)
+
+    def resize(self, size):
+        if size >= self.base:
+            return
+        for r in self.runs:
+            _set_size(r, size)
+        pPr = self.p.find(qn("w:pPr"))
+        if pPr is not None and pPr.find(qn("w:rPr")) is not None:
+            _set_size(pPr.find(qn("w:rPr")), size)   # знак абзаца тоже задаёт высоту строки
+
+
+def _find_targets(tbl):
+    """До подстановки: находит абзацы, размер которых может понадобиться уменьшить."""
+    for p in tbl.iter(qn("w:p")):
+        _merge_split_placeholders(p)
+    found = {}
+    for p in tbl.iter(qn("w:p")):
+        text = _par_text(p)
+        for key, whole in (("surname", False), ("name", False), ("patronymic", False),
+                           ("position", True), ("org", True), ("permit_text", True)):
+            if "{" + key + "}" in text and key not in found:
+                found[key] = _Target(p, key, whole)
+    return found
+
+
+def _fit_text(found):
+    """После подстановки: уменьшает шрифт, пока текст не влезет в свою ячейку."""
+    for key in ("surname", "name", "patronymic"):
+        t = found.get(key)
+        if t:
+            t.resize(next(s for s in _sizes_down(t.base)
+                          if _text_width(t.text().strip(), s, t.bold) <= FIO_WIDTH_PT or s == MIN_PT))
+
+    pos, org = found.get("position"), found.get("org")
+    if pos and org:
+        # Одно уменьшение на оба абзаца, организация не крупнее должности.
+        for step in range(0, 20):
+            ps = max(MIN_PT, pos.base - step * 0.5)
+            os_ = max(MIN_PT, min(org.base, ps))
+            height = (_line_count(pos.text(), BOX_WIDTH_PT, ps, pos.bold) * ps
+                      + _line_count(org.text(), BOX_WIDTH_PT, os_, org.bold) * os_) * LINE_FACTOR
+            if height <= BOX_TEXT_PT or ps == MIN_PT:
+                break
+        pos.resize(ps)
+        org.resize(os_)
+
+    permit = found.get("permit_text")
+    if permit:
+        permit.resize(next(
+            s for s in _sizes_down(permit.base)
+            if _line_count(permit.text(), PERMIT_WIDTH_PT, s, permit.bold) * s * LINE_FACTOR
+            <= PERMIT_HEIGHT_PT or s == MIN_PT
+        ))
 
 def _ensure_trailing_p(tc):
     """Ячейка обязана заканчиваться абзацем, иначе Word считает файл битым."""
@@ -330,6 +390,7 @@ def create_certificates_file(output_path, participants_with_groups, info):
         _ppr = _tblPr.find(qn("w:tblPPr"))
         if _ppr is not None:
             _tblPr.remove(_ppr)
+    suppress_hyphens_for(clean_tbl, ("surname", "name", "patronymic", "position", "org"))
 
     # Полностью очищаем тело документа (кроме свойств страницы),
     # чтобы не оставалось лишних абзацев и пустых половин листа.
@@ -383,15 +444,12 @@ def create_certificates_file(output_path, participants_with_groups, info):
 
             tbl = copy.deepcopy(clean_tbl)
             _strip_ids(tbl, done)
+            targets = _find_targets(tbl)
             _fill_element(tbl, mapping)
-
-            table = Table(tbl, doc)
-            _fix_geometry(table)
-            _shrink_long_position(table, position)
-            _consume_spacers_for_position(table, position)
-            _consume_spacers_for_permit(table, mapping)
-            _ensure_trailing_p(table.rows[0].cells[0]._tc)
-            _ensure_trailing_p(table.rows[0].cells[1]._tc)
+            _fit_text(targets)
+            _fix_geometry(tbl)
+            for tc in tbl.iter(qn("w:tc")):
+                _ensure_trailing_p(tc)
 
             _append_before_sectpr(doc, tbl)
 
@@ -402,6 +460,6 @@ def create_certificates_file(output_path, participants_with_groups, info):
                 else:
                     spacer = doc.add_paragraph("")
                     spacer.paragraph_format.space_after = Pt(6)
-        number = _next_number(number)
+            number = next_number(number)          # у каждого удостоверения свой номер
 
     doc.save(output_path)

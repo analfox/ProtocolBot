@@ -260,8 +260,12 @@ def extract_from_docx(file_path: str) -> list[dict]:
         position_idx = None
         org_idx = None
         group_idx = None
+        snils_idx = None
 
         for i, h in enumerate(header):
+            if "снилс" in h:
+                snils_idx = i
+                continue
             if "фамилия" in h or "фио" in h or "имя" in h:
                 name_idx = i
             if "должность" in h or "профессия" in h:
@@ -284,12 +288,14 @@ def extract_from_docx(file_path: str) -> list[dict]:
             position = re.sub(r'\s+', ' ', cells[position_idx]) if position_idx is not None and len(cells) > position_idx else ""
             org = re.sub(r'\s+', ' ', cells[org_idx]) if org_idx is not None and len(cells) > org_idx else ""
             group = re.sub(r'\s+', ' ', cells[group_idx]) if group_idx is not None and len(cells) > group_idx else ""
+            snils = re.sub(r'\s+', ' ', cells[snils_idx]) if snils_idx is not None and len(cells) > snils_idx else ""
 
             participants.append({
                 "name": name,
                 "position": position,
                 "organization": org,
                 "group": group,
+                "snils": snils,
             })
 
     return participants
@@ -648,12 +654,14 @@ def create_protocol_docx(participants: list[dict], protocol_info: dict, permits_
 
 def _find_header_cols(row):
     """Ищет в строке шапку таблицы. Возвращает колонки или None, если это не шапка."""
-    name_col = position_col = org_col = group_col = None
+    name_col = position_col = org_col = group_col = snils_col = None
     for col_idx, cell in enumerate(row):
         hn = _norm_header(cell)
         if not hn:
             continue
-        if "фамилия" in hn or "фио" in hn or "имя" in hn:
+        if "снилс" in hn:
+            snils_col = col_idx
+        elif "фамилия" in hn or "фио" in hn or "имя" in hn:
             name_col = col_idx
         elif "должность" in hn or "профессия" in hn:
             position_col = col_idx
@@ -663,7 +671,7 @@ def _find_header_cols(row):
             group_col = col_idx
     if name_col is None:
         return None
-    return name_col, position_col, org_col, group_col
+    return name_col, position_col, org_col, group_col, snils_col
 
 
 def _split_rows_into_tables(rows, label):
@@ -683,7 +691,7 @@ def _split_rows_into_tables(rows, label):
             continue
         if current is None:
             continue
-        name_col, position_col, org_col, group_col = current["cols"]
+        name_col, position_col, org_col, group_col, snils_col = current["cols"]
         if not row or name_col >= len(row):
             continue
         name = _cell_text(row[name_col])
@@ -692,11 +700,13 @@ def _split_rows_into_tables(rows, label):
         position = _cell_text(row[position_col]) if position_col is not None and len(row) > position_col else ""
         org = _cell_text(row[org_col]) if org_col is not None and len(row) > org_col else ""
         group = _cell_text(row[group_col]) if group_col is not None and len(row) > group_col else ""
+        snils = _cell_text(row[snils_col]) if snils_col is not None and len(row) > snils_col else ""
         current["participants"].append({
             "name": name,
             "position": position,
             "organization": org,
             "group": group,
+            "snils": snils,
         })
     return [t for t in tables if t["participants"]]
 
