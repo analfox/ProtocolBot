@@ -81,13 +81,21 @@ def _name(tag):
 
 
 def _date_parts(date_str):
+    """'1.9.2026' -> ('01', 'сентября', 2026): число всегда двумя цифрами."""
     m = re.match(r"^(\d{1,2})\.(\d{1,2})\.(\d{4})$", str(date_str or "").strip())
     if not m:
         return None
     day, month, year = m.groups()
     if not 1 <= int(month) <= 12:
         return None
-    return int(day), _MONTHS[int(month) - 1], int(year)
+    return f"{int(day):02d}", _MONTHS[int(month) - 1], int(year)
+
+
+def format_date(date_str):
+    """'1.9.2026' -> '01.09.2026'; что не похоже на дату - как есть."""
+    s = str(date_str or "").strip()
+    m = re.match(r"^(\d{1,2})\.(\d{1,2})\.(\d{4})$", s)
+    return f"{int(m[1]):02d}.{int(m[2]):02d}.{m[3]}" if m else s
 
 
 def next_number(current):
@@ -404,7 +412,7 @@ def create_certificates_file(output_path, participants_with_groups, info):
         day, month_name, year = parts
     else:
         now = datetime.now()
-        day, month_name, year = now.day, _MONTHS[now.month - 1], now.year
+        day, month_name, year = f"{now.day:02d}", _MONTHS[now.month - 1], now.year
     issue_date = f"«{day}» {month_name} {year} г."
 
     number = str(info.get("start_number", "")).strip()

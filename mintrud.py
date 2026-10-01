@@ -77,7 +77,6 @@ def create_mintrud_protocol(output_path, rows, info):
     parts = _date_parts(info.get("date"))
     if parts:
         day, month_name, year = parts
-        day = f"{day:02d}"
     else:
         day, month_name, year = info.get("date", ""), "", ""
 

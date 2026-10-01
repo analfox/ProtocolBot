@@ -62,14 +62,16 @@ def split_permit_groups(codes_str):
 class SettingsDialog(tk.Toplevel):
     def __init__(self, parent, config, on_saved=None):
         super().__init__(parent)
-        self.title("Настройки распознавания (OCR)")
-        self.geometry("760x360")
+        self.title("Настройки")
+        self.geometry("920x470")
         self.transient(parent)
         self.grab_set()
 
         self.on_saved = on_saved
         self.config = dict(config)
 
+        self.apps_var = tk.StringVar(value=self.config.get("applications_dir", ""))
+        self.out_var = tk.StringVar(value=self.config.get("output_dir", ""))
         self.tess_var = tk.StringVar(value=self.config.get("tesseract_path", ""))
         self.pop_var = tk.StringVar(value=self.config.get("poppler_path", ""))
         self.lang_var = tk.StringVar(value=self.config.get("ocr_lang", "rus"))
@@ -85,7 +87,24 @@ class SettingsDialog(tk.Toplevel):
             fg="#555555"
         ).pack(anchor=tk.W, **pad)
 
-        body = ttk.Frame(self)
+        folders = ttk.LabelFrame(self, text="Папки (с них открываются окна выбора)", padding=8)
+        folders.pack(fill=tk.X, **pad)
+        self.folder_status = []
+        for row, (label, var) in enumerate((
+            ("Путь к заявкам:", self.apps_var),
+            ("Путь к готовым документам:", self.out_var),
+        )):
+            ttk.Label(folders, text=label, width=28).grid(row=row, column=0, sticky=tk.W, pady=4)
+            ttk.Entry(folders, textvariable=var, width=54).grid(row=row, column=1, padx=5, pady=4)
+            ttk.Button(
+                folders, text="Обзор…", command=lambda v=var: self._browse_dir(v)
+            ).grid(row=row, column=2, pady=4)
+            status = tk.Label(folders, text="", width=14, anchor=tk.W)
+            status.grid(row=row, column=3, padx=5, pady=4)
+            self.folder_status.append((var, status))
+            var.trace_add("write", lambda *a: self._refresh_status())
+
+        body = ttk.LabelFrame(self, text="Распознавание PDF (OCR)", padding=8)
         body.pack(fill=tk.X, **pad)
 
         ttk.Label(body, text="Tesseract (tesseract.exe):").grid(row=0, column=0, sticky=tk.W, pady=4)
@@ -143,6 +162,11 @@ class SettingsDialog(tk.Toplevel):
         if path:
             self.tess_var.set(path)
 
+    def _browse_dir(self, var):
+        path = filedialog.askdirectory(title="Выберите папку", initialdir=var.get() or None)
+        if path:
+            var.set(path)
+
     def _browse_pop(self):
         path = filedialog.askdirectory(
             title="Выберите папку bin утилит Poppler",
@@ -152,6 +176,15 @@ class SettingsDialog(tk.Toplevel):
             self.pop_var.set(path)
 
     def _refresh_status(self):
+        for var, status in self.folder_status:
+            path = var.get().strip()
+            if path and os.path.isdir(path):
+                status.config(text="✓ найдена", fg="#2e7d32")
+            elif path:
+                status.config(text="✗ не найдена", fg="#c62828")
+            else:
+                status.config(text="— не задана", fg="#888888")
+
         tess = self.tess_var.get().strip()
         if tess and os.path.isfile(tess):
             self.tess_status.config(text="✓ найден", fg="#2e7d32")
@@ -175,12 +208,16 @@ class SettingsDialog(tk.Toplevel):
             messagebox.showerror("Ошибка", "Качество скана (dpi) должно быть числом")
             return
 
-        new_config = {
+        # Поверх текущих настроек - иначе пропали бы поля, которых нет в окне (pdf_pages).
+        new_config = get_config()
+        new_config.update({
+            "applications_dir": self.apps_var.get().strip(),
+            "output_dir": self.out_var.get().strip(),
             "tesseract_path": self.tess_var.get().strip(),
             "poppler_path": self.pop_var.get().strip(),
             "ocr_lang": self.lang_var.get().strip() or "rus",
             "ocr_dpi": dpi,
-        }
+        })
 
         save_config(new_config)
         self.config = new_config
@@ -347,8 +384,12 @@ class ProtocolBotApp:
     def __init__(self, root):
         self.root = root
         self.root.title("ProtocolBot - Создание протоколов")
-        self.root.geometry("1000x800")
+        self.root.geometry("1000x800")          # размер после «Восстановить»
         self.root.minsize(900, 700)
+        try:
+            self.root.state("zoomed")              # открываемся развёрнутыми (Windows)
+        except tk.TclError:
+            pass
 
         self.bg_color = "#f5f5f5"
         self.accent_color = "#2196F3"
@@ -517,7 +558,7 @@ class ProtocolBotApp:
             step3_frame,
             columns=columns,
             show="headings",
-            height=10,
+            height=8,
             selectmode="extended"
         )
 
@@ -564,7 +605,7 @@ class ProtocolBotApp:
 
         ttk.Button(
             hint_frame,
-            text="⚙ Настройки OCR",
+            text="⚙ Настройки",
             command=self.open_settings
         ).pack(side=tk.RIGHT, padx=(0, 8))
 
@@ -601,13 +642,18 @@ class ProtocolBotApp:
         status_bar.pack(fill=tk.X, pady=(10, 0))
 
     # -----------------------------------------------------------------
-    # Настройки OCR
+    # Настройки (папки, OCR)
     # -----------------------------------------------------------------
     def open_settings(self):
         SettingsDialog(self.root, self.config, on_saved=self._on_config_saved)
 
     def _on_config_saved(self):
         self.config = get_config()
+
+    def _dir_from_config(self, key):
+        """Папка из настроек; не задана или не найдена - папка программы."""
+        path = (self.config.get(key) or "").strip()
+        return path if os.path.isdir(path) else os.path.dirname(os.path.abspath(__file__))
 
     def _check_ocr_paths(self):
         tess = (self.config.get("tesseract_path") or "").strip()
@@ -656,7 +702,7 @@ class ProtocolBotApp:
         filename = filedialog.askopenfilename(
             title="Выберите файл со списком участников",
             filetypes=filetypes,
-            initialdir=os.path.dirname(os.path.abspath(__file__))
+            initialdir=self._dir_from_config("applications_dir")
         )
 
         if filename:
@@ -763,7 +809,7 @@ class ProtocolBotApp:
             messagebox.showwarning(
                 "Внимание",
                 "Таблицы не найдены или не распознаны.\n"
-                "Проверьте качество скана, язык и страницы в «Настройках OCR»."
+                "Проверьте качество скана, язык и страницы в «Настройках»."
             )
             return []
 
@@ -1222,7 +1268,7 @@ class ProtocolBotApp:
 
         base_protocol_info = {
             "protocol_number": self.protocol_num.get().strip(),
-            "date": self.date_entry.get().strip() or datetime.now().strftime("%d.%m.%Y"),
+            "date": self._get_date(),
             "course_name": "Безопасные методы и приемы выполнения работ на высоте",
             "group": self.group_var.get(),
             "hours": self.hours_var.get(),
@@ -1271,7 +1317,7 @@ class ProtocolBotApp:
             title="Сохранить протокол",
             defaultextension=".docx",
             filetypes=[("Word документ", "*.docx")],
-            initialdir=os.path.dirname(os.path.abspath(__file__)),
+            initialdir=self._dir_from_config("output_dir"),
             initialfile=safe_name
         )
 
@@ -1307,7 +1353,8 @@ class ProtocolBotApp:
 
     def _generate_separate_protocols(self, groups, base_protocol_info):
         output_dir = filedialog.askdirectory(
-            title="Выберите папку для сохранения протоколов по группам"
+            title="Выберите папку для сохранения протоколов по группам",
+            initialdir=self._dir_from_config("output_dir")
         )
         if not output_dir:
             return
@@ -1403,20 +1450,14 @@ class ProtocolBotApp:
     # -----------------------------------------------------------------
     # Создание Word-файла протокола (формат как в образце 19.06.2026)
     # -----------------------------------------------------------------
-    def _date_parts(self, date_str):
-        """Разбирает дату "ДД.ММ.ГГГГ" и возвращает (день, месяц словами, год) или None."""
-        months = [
-            "января", "февраля", "марта", "апреля", "мая", "июня",
-            "июля", "августа", "сентября", "октября", "ноября", "декабря",
-        ]
-        s = str(date_str or "").strip()
-        m = re.match(r"^(\d{1,2})\.(\d{1,2})\.(\d{4})$", s)
-        if not m:
-            return None
-        day, month, year = m.groups()
-        if not 1 <= int(month) <= 12:
-            return None
-        return int(day), months[int(month) - 1], year
+    def _get_date(self):
+        """Дата из поля всегда ДД.ММ.ГГГГ (1.9.2026 -> 01.09.2026, поле тоже
+        исправляется); пусто - сегодня."""
+        date = certificates.format_date(self.date_entry.get()) or datetime.now().strftime("%d.%m.%Y")
+        if date != self.date_entry.get():
+            self.date_entry.delete(0, tk.END)
+            self.date_entry.insert(0, date)
+        return date
 
     def create_protocol_file(
         self,
@@ -1438,7 +1479,7 @@ class ProtocolBotApp:
         org_name = (protocol_info.get("organization") or "").strip()
 
         # Дата словами: "19.06.2026" -> "от «19» июня 2026 г."
-        parts = self._date_parts(protocol_info["date"])
+        parts = certificates._date_parts(protocol_info["date"])
         if parts:
             day, month_name, year = parts
             date_line = f"от «{day}» {month_name} {year} г."
@@ -1702,13 +1743,13 @@ class ProtocolBotApp:
         for p in self.participants:
             rows.append((p, self._certificate_groups(p)))
         safe_name = self._sanitize_filename(
-            f"Удостоверения_{self.protocol_num.get().strip()}_{self.date_entry.get().strip()}.docx"
+            f"Удостоверения_{self.protocol_num.get().strip()}_{self._get_date()}.docx"
         )
         output_path = filedialog.asksaveasfilename(
             title="Сохранить удостоверения",
             defaultextension=".docx",
             filetypes=[("Word документ", "*.docx")],
-            initialdir=os.path.dirname(os.path.abspath(__file__)),
+            initialdir=self._dir_from_config("output_dir"),
             initialfile=safe_name
         )
         if not output_path:
@@ -1721,7 +1762,7 @@ class ProtocolBotApp:
                 rows,
                 {
                     "protocol_number": self.protocol_num.get().strip(),
-                    "date": self.date_entry.get().strip() or datetime.now().strftime("%d.%m.%Y"),
+                    "date": self._get_date(),
                     "hours": self.hours_var.get(),
                     "organization": self.org_var.get().strip(),
                     "start_number": start_number,
@@ -1764,7 +1805,7 @@ class ProtocolBotApp:
 
         info = {
             "protocol_number": self.protocol_num.get().strip(),
-            "date": self.date_entry.get().strip() or datetime.now().strftime("%d.%m.%Y"),
+            "date": self._get_date(),
             "organization": self.org_var.get().strip(),
             "inn": inn,
         }
@@ -1775,7 +1816,7 @@ class ProtocolBotApp:
             title="Сохранить реестр",
             defaultextension=".xlsx",
             filetypes=[("Excel", "*.xlsx")],
-            initialdir=os.path.dirname(os.path.abspath(__file__)),
+            initialdir=self._dir_from_config("output_dir"),
             initialfile=safe_name
         )
         if not output_path:
