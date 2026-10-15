@@ -63,7 +63,7 @@ class SettingsDialog(tk.Toplevel):
     def __init__(self, parent, config, on_saved=None):
         super().__init__(parent)
         self.title("Настройки")
-        self.geometry("920x470")
+        self.geometry("920x550")
         self.transient(parent)
         self.grab_set()
 
@@ -76,6 +76,7 @@ class SettingsDialog(tk.Toplevel):
         self.pop_var = tk.StringVar(value=self.config.get("poppler_path", ""))
         self.lang_var = tk.StringVar(value=self.config.get("ocr_lang", "rus"))
         self.dpi_var = tk.StringVar(value=str(self.config.get("ocr_dpi", 300)))
+        self.cert_year_var = tk.StringVar(value=str(self.config.get("cert_year", "") or ""))
 
         pad = {"padx": 10, "pady": 6}
 
@@ -103,6 +104,16 @@ class SettingsDialog(tk.Toplevel):
             status.grid(row=row, column=3, padx=5, pady=4)
             self.folder_status.append((var, status))
             var.trace_add("write", lambda *a: self._refresh_status())
+
+        certs = ttk.LabelFrame(self, text="Удостоверения", padding=8)
+        certs.pack(fill=tk.X, **pad)
+        ttk.Label(certs, text="Год удостоверений:", width=28).grid(row=0, column=0, sticky=tk.W, pady=4)
+        ttk.Entry(certs, textvariable=self.cert_year_var, width=8).grid(row=0, column=1, sticky=tk.W, padx=5, pady=4)
+        ttk.Label(
+            certs,
+            text="пишется после номера через «/»: 26 → 1234/26, 1235/26 …; пусто — без года",
+            foreground="#888888"
+        ).grid(row=0, column=2, sticky=tk.W, padx=5)
 
         body = ttk.LabelFrame(self, text="Распознавание PDF (OCR)", padding=8)
         body.pack(fill=tk.X, **pad)
@@ -217,6 +228,7 @@ class SettingsDialog(tk.Toplevel):
             "poppler_path": self.pop_var.get().strip(),
             "ocr_lang": self.lang_var.get().strip() or "rus",
             "ocr_dpi": dpi,
+            "cert_year": self.cert_year_var.get().strip().strip("/"),
         })
 
         save_config(new_config)
@@ -586,6 +598,10 @@ class ProtocolBotApp:
 
         self.tree.bind("<Double-1>", self.on_tree_double_click)
         self.tree.bind("<Button-3>", self.on_tree_right_click)
+        self._drag = None
+        self.tree.bind("<ButtonPress-1>", self._drag_start, add="+")
+        self.tree.bind("<B1-Motion>", self._drag_motion, add="+")
+        self.tree.bind("<ButtonRelease-1>", self._drag_drop, add="+")
 
         # === ПОДСКАЗКА + НАСТРОЙКИ ===
         hint_frame = ttk.Frame(main_frame)
@@ -593,7 +609,9 @@ class ProtocolBotApp:
 
         ttk.Label(
             hint_frame,
-            text="Двойной клик — редактировать ячейку. Правый клик — массовые действия. Коды: 2: 8,10; 3: 5,6",
+            text="Двойной клик — редактировать ячейку. Правый клик — массовые действия. Коды: 2: 8,10; 3: 5,6\n"
+                 "Перетащите заголовок столбца на другой — поменять столбцы местами у всех; "
+                 "ячейку — только в этой строке",
             foreground="gray"
         ).pack(side=tk.LEFT)
 
@@ -985,6 +1003,49 @@ class ProtocolBotApp:
     def _sync_all(self):
         for item in self.tree.get_children():
             self._sync_participant(item)
+
+    # Группа и допуски нормализуются при сохранении - чужой текст в них потерялся бы.
+    SWAPPABLE_FIELDS = ("name", "position", "subdivision", "snils")
+
+    def _swappable_field_at(self, x):
+        col = self.tree.identify_column(x)
+        idx = int(col[1:]) - 1 if col[1:].isdigit() else -1
+        columns = self.tree["columns"]
+        if 0 <= idx < len(columns) and columns[idx] in self.SWAPPABLE_FIELDS:
+            return columns[idx]
+        return None
+
+    def _drag_start(self, event):
+        """Тянут заголовок столбца (меняем у всех) или ячейку (только эта строка)."""
+        self._drag = None
+        region = self.tree.identify_region(event.x, event.y)
+        field = self._swappable_field_at(event.x)
+        if field and region in ("heading", "cell"):
+            whole = region == "heading"
+            items = self.tree.get_children() if whole else (self.tree.identify_row(event.y),)
+            self._drag = (field, items, whole)
+
+    def _drag_motion(self, event):
+        if self._drag:
+            target = self._swappable_field_at(event.x)
+            self.tree.configure(cursor="exchange" if target and target != self._drag[0] else "")
+
+    def _drag_drop(self, event):
+        drag, self._drag = self._drag, None
+        self.tree.configure(cursor="")
+        target = self._swappable_field_at(event.x)
+        if not drag or not target or target == drag[0]:
+            return
+        src, items, whole = drag
+        for item in items:
+            values = {src: self.tree.set(item, target), target: self.tree.set(item, src)}
+            for field, value in values.items():
+                self.tree.set(item, field, mintrud.format_snils(value) if field == "snils" else value)
+            self._sync_participant(item)
+        self.status_var.set(
+            f"Поменяли местами «{self.tree.heading(src, 'text')}» и «{self.tree.heading(target, 'text')}»"
+            + ("" if whole else " в одной строке")
+        )
 
     def on_tree_double_click(self, event):
         region = self.tree.identify("region", event.x, event.y)
@@ -1426,13 +1487,22 @@ class ProtocolBotApp:
         «Сформировать удостоверения»: с первого по журналу, +1 на каждое
         удостоверение. p["cert_numbers"] = {группа: номер}.
         Поле пустое - в протоколе остаётся прочерк."""
-        number = self.cert_start_entry.get().strip()
+        number = self._cert_start_number()
         for p in self.participants:
             p["cert_numbers"] = {}
             for grp in self._certificate_groups(p):
                 if number:
                     p["cert_numbers"][grp] = number
                     number = certificates.next_number(number)
+
+    def _cert_start_number(self):
+        """№ первого удостоверения с годом из настроек: 1234 -> 1234/26.
+        next_number хвост «/26» сохраняет: 1235/26, 1236/26..."""
+        number = self.cert_start_entry.get().strip()
+        year = str(self.config.get("cert_year", "") or "").strip()
+        if number and year and "/" not in number:
+            number = f"{number}/{year}"
+        return number
 
     def _create_mintrud_protocol(self, output_dir, protocol_info):
         """Второй протокол - проверка знаний ОТ (Минтруд), один на всех участников."""
@@ -1469,7 +1539,7 @@ class ProtocolBotApp:
         import docx
         from docx.shared import Pt, Cm
         from docx.enum.text import WD_ALIGN_PARAGRAPH
-        from docx.enum.table import WD_TABLE_ALIGNMENT
+        from docx.enum.table import WD_TABLE_ALIGNMENT, WD_CELL_VERTICAL_ALIGNMENT
 
         if participants is None:
             participants = self.participants
@@ -1626,8 +1696,13 @@ class ProtocolBotApp:
                         top_cell = top_cell.merge(table.cell(r, j))
 
         for row in table.rows:
-            for cell in row.cells:
+            for i, cell in enumerate(row.cells):
+                center = i != 6  # «Допущен к работам» выравниваем как раньше
+                if center:
+                    cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
                 for paragraph in cell.paragraphs:
+                    if center:
+                        paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
                     for run in paragraph.runs:
                         run.font.size = Pt(9)
 
@@ -1733,7 +1808,7 @@ class ProtocolBotApp:
         if not self.protocol_num.get().strip():
             messagebox.showwarning("Внимание", "Введите номер протокола")
             return
-        start_number = self.cert_start_entry.get().strip()
+        start_number = self._cert_start_number()
         if not start_number:
             messagebox.showwarning("Внимание", "Введите номер первого удостоверения (по журналу)")
             self.cert_start_entry.focus_set()
