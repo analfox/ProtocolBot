@@ -776,7 +776,8 @@ class ProtocolBotApp:
             p.pop("organization", None)
 
             p.setdefault("name", "")
-            p.setdefault("position", "")
+            position = str(p.get("position") or "").strip()
+            p["position"] = position[:1].upper() + position[1:]
             p["snils"] = mintrud.format_snils(p.get("snils", ""))
             p["group"] = self._normalize_group(p.get("group", ""))
             p.setdefault("permit_codes", "")
@@ -985,7 +986,11 @@ class ProtocolBotApp:
 
         p = self.participants[idx]
         p["name"] = str(values[1]).strip()
-        p["position"] = str(values[2]).strip()
+        # Должность всегда с заглавной (в заявках бывает с маленькой).
+        position = str(values[2]).strip()
+        p["position"] = position[:1].upper() + position[1:]
+        if p["position"] != values[2]:
+            self.tree.set(item, "position", p["position"])
         p["subdivision"] = str(values[3]).strip()
         p["snils"] = str(values[4]).strip()
         p["group"] = self._normalize_group(values[5])
@@ -1367,9 +1372,7 @@ class ProtocolBotApp:
         group_override = None
 
         safe_name = self._sanitize_filename(
-            f"Протокол_{self.protocol_info['protocol_number']}_"
-            f"{self.protocol_info['date']}_"
-            f"группа_{self.protocol_info['group']}.docx"
+            f"Протокол_{self.protocol_info['protocol_number']}_{self.protocol_info['date']}.docx"
         )
         if not safe_name.lower().endswith(".docx"):
             safe_name += ".docx"
@@ -1437,6 +1440,7 @@ class ProtocolBotApp:
                 protocol_info = dict(base_protocol_info)
                 protocol_info["group"] = group
 
+                # Группа в имени нужна: протоколы лежат в одной папке и иначе затрут друг друга.
                 safe_group = self._sanitize_filename(str(group).replace(" ", "_"))
 
                 filename = self._sanitize_filename(
@@ -1666,19 +1670,19 @@ class ProtocolBotApp:
                 if gi == 0:
                     row.cells[0].text = f"{idx}."
 
-                    # Под ФИО - подразделение, а если его нет - организация.
-                    # Под должностью ничего не пишется.
-                    name_org = participant.get("name", "")
+                    # ФИО 12 шрифтом, через пустую строку жирным - подразделение,
+                    # а если его нет - организация. Под должностью ничего не пишется.
+                    name_par = row.cells[1].paragraphs[0]
+                    name_par.add_run(participant.get("name", "")).font.size = Pt(12)
                     second_line = (participant.get("subdivision") or "").strip() or org_name
                     if second_line:
-                        name_org += "\n" + second_line
-                    row.cells[1].text = name_org
+                        name_par.add_run("\n\n" + second_line).bold = True
 
                     row.cells[2].text = participant.get("position", "")
 
                 row.cells[3].text = "сдано"
                 row.cells[4].text = participant.get("cert_numbers", {}).get(grp) or "____"
-                row.cells[5].text = grp
+                row.cells[5].paragraphs[0].add_run(grp).bold = True
 
                 texts = participant.get("permit_text_by_group", {}) or {}
                 full_permits = texts.get(grp) or texts.get("") or ""
@@ -1704,23 +1708,23 @@ class ProtocolBotApp:
                     if center:
                         paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
                     for run in paragraph.runs:
-                        run.font.size = Pt(9)
+                        if run.font.size is None:  # ФИО уже 12
+                            run.font.size = Pt(9)
 
-        # === Подписи после таблицы ===
-        doc.add_paragraph("")
+        # === Подписи после таблицы, между членами комиссии пустая строка ===
         for line in (
             "Председатель комиссии: _______________ А.А. Первушов",
             "Члены комиссии: ________________ П.А. Украинцев",
             "_______________ Л.П. Леонтьева",
         ):
+            doc.add_paragraph("")
             p = doc.add_paragraph()
             p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
             p.add_run(line)
 
-        # === Ведомость после протокола (люди расписываются) ===
-        doc.add_paragraph("")
-
+        # === Ведомость после протокола, с новой страницы (люди расписываются) ===
         p = doc.add_paragraph()
+        p.paragraph_format.page_break_before = True
         p.alignment = WD_ALIGN_PARAGRAPH.CENTER
         run = p.add_run(f'В Е Д О М О С Т Ь к протоколу № {protocol_info["protocol_number"]}')
         run.bold = True
