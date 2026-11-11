@@ -1575,7 +1575,13 @@ class ProtocolBotApp:
         # === Шапка ===
         p = doc.add_paragraph()
         p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        run = p.add_run('ЧУДПО "Учебный комбинат "Мелиоратор"')
+        run = p.add_run('Частное учреждение дополнительного профессионального образования')
+        run.font.size = Pt(12)
+        run.bold = True
+
+        p = doc.add_paragraph()
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        run = p.add_run('"У Ч Е Б Н Ы Й   К О М Б И Н А Т   "М Е Л И О Р А Т О Р"')
         run.font.size = Pt(14)
         run.bold = True
 
